@@ -1,0 +1,7 @@
+node_modules
+npm-debug.log
+.git
+.env
+stwdo-last.json
+stwdo-meta.json
+.DS_Store
