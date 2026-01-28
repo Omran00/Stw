@@ -54,6 +54,7 @@ import { Element } from "domhandler";
 import fs from "fs-extra";
 import * as path from "path";
 import * as dotenv from "dotenv";
+import * as http from "http";
 
 dotenv.config();
 
@@ -280,6 +281,15 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 async function main() {
   console.log("Starting STWDO offer monitor for:", MONITOR_URL);
   console.log(`Polling interval: ${POLL_INTERVAL_SECONDS}s`);
+
+  // Start a minimal HTTP server for health checks (Koyeb/Render)
+  const PORT = process.env.PORT || 8000;
+  http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("OK");
+  }).listen(PORT, () => {
+    console.log(`Health check server listening on port ${PORT}`);
+  });
 
   while (true) {
     try {
