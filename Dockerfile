@@ -16,8 +16,11 @@ COPY . .
 # Ensure storage files exist and are writable
 RUN touch stwdo-last.json stwdo-meta.json && chmod 666 stwdo-last.json stwdo-meta.json
 
+# Set default port
+ENV PORT=8000
+
 # Expose the health check port
-EXPOSE 8000
+EXPOSE $PORT
 
 # Start the application
 CMD ["npm", "start"]

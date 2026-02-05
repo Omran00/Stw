@@ -55,6 +55,7 @@ import fs from "fs-extra";
 import * as path from "path";
 import * as dotenv from "dotenv";
 import * as http from "http";
+import { HttpsProxyAgent } from "https-proxy-agent";
 
 dotenv.config();
 
@@ -65,10 +66,25 @@ const META_FILE = path.resolve(process.cwd(), "stwdo-meta.json");
 
 // Notification method: "telegram" | "webhook" | "email" | "console"
 const NOTIFY_METHOD = (process.env.NOTIFY_METHOD || "console").toLowerCase();
+const PERIODIC_CALL_URL = process.env.PERIODIC_CALL_URL;
+const PERIODIC_CALL_SECONDS = Number(process.env.PERIODIC_CALL_SECONDS || "120");
+const USE_PROXY = process.env.USE_PROXY === "true";
 
 // Telegram config
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+// Proxy config
+const PROXY_HOST = process.env.PROXY_HOST;
+const PROXY_PORT = process.env.PROXY_PORT ? Number(process.env.PROXY_PORT) : undefined;
+const PROXY_USERNAME = process.env.PROXY_USERNAME;
+const PROXY_PASSWORD = process.env.PROXY_PASSWORD;
+
+const proxyUrl = (PROXY_HOST && PROXY_PORT)
+  ? `http://${PROXY_USERNAME && PROXY_PASSWORD ? `${PROXY_USERNAME}:${PROXY_PASSWORD}@` : ""}${PROXY_HOST}:${PROXY_PORT}`
+  : undefined;
+
+const httpsAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 
 // Webhook
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
@@ -181,15 +197,23 @@ async function notifyNewOffers(newOffers: { id: string; title: string; url: stri
         console.error("Telegram selected but TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing in env.");
         break;
       }
+      console.log(`Sending Telegram notification via proxy: ${PROXY_HOST}:${PROXY_PORT}...`);
       try {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           chat_id: TELEGRAM_CHAT_ID,
           text: message,
           disable_web_page_preview: false,
+        }, {
+          httpsAgent: USE_PROXY ? httpsAgent : undefined,
+          proxy: false, // Disable axios default proxy handling
+          timeout: 15_000,
         });
-        console.log("Sent Telegram notification");
-      } catch (err) {
-        console.error("Telegram notify error", err);
+        console.log("✅ Sent Telegram notification");
+      } catch (err: any) {
+        console.error("❌ Telegram notify error:", err.message || err);
+        if (err.code === 'ECONNABORTED') {
+          console.error("Timeout reached. The proxy might be unresponsive.");
+        }
       }
       break;
 
@@ -256,7 +280,7 @@ async function checkOnce() {
       return;
     }
 
-    const lastSeenIds = new Set(last.offers || []);
+    const lastSeenIds = new Set<string>(last.offers || []);
 
     // Determine newly appeared offers
     const newOffers = offers.filter(o => !lastSeenIds.has(o.id));
@@ -278,18 +302,46 @@ async function checkOnce() {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+async function runPeriodicJob() {
+  if (!PERIODIC_CALL_URL) {
+    console.log("No PERIODIC_CALL_URL defined, skipping job.");
+    return;
+  }
+
+  console.log(`Starting periodic job for: ${PERIODIC_CALL_URL} (every 40m)`);
+
+  while (true) {
+    try {
+      console.log(`[${new Date().toLocaleString()}] Periodic job: Calling ${PERIODIC_CALL_URL}${USE_PROXY ? " (via proxy)" : ""}`);
+      await axios.get(PERIODIC_CALL_URL, {
+        httpsAgent: USE_PROXY ? httpsAgent : undefined,
+        proxy: false,
+        timeout: 20_000,
+      });
+      console.log(`[${new Date().toLocaleString()}] Periodic job: Success ✅`);
+    } catch (err: any) {
+      console.error(`[${new Date().toLocaleString()}] Periodic job error:`, err.message || err);
+    }
+    // Wait for 40 minutes
+    await sleep(PERIODIC_CALL_SECONDS * 1000);
+  }
+}
+
 async function main() {
   console.log("Starting STWDO offer monitor for:", MONITOR_URL);
   console.log(`Polling interval: ${POLL_INTERVAL_SECONDS}s`);
 
   // Start a minimal HTTP server for health checks (Koyeb/Render)
-  const PORT = process.env.PORT || 8000;
+  const PORT = process.env.PORT || 7860;
   http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("OK");
   }).listen(PORT, () => {
     console.log(`Health check server listening on port ${PORT}`);
   });
+
+  // Start the periodic job in the background (no await)
+  runPeriodicJob().catch(err => console.error("Periodic job critical error:", err));
 
   while (true) {
     try {
