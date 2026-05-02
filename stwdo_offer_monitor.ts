@@ -89,6 +89,27 @@ const httpsAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 // Webhook
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
+// Auto-Apply Config
+const DRY_RUN = process.env.DRY_RUN !== "false"; // Default to true for safety
+const APP_EMAIL = process.env.APP_EMAIL || "tibate9833@cadinr.com";
+const APP_FIRST_NAME = process.env.APP_FIRST_NAME || "First";
+const APP_LAST_NAME = process.env.APP_LAST_NAME || "Last";
+const APP_PHONE = process.env.APP_PHONE || "+49 1579 123456";
+const APP_BIRTHDAY = process.env.APP_BIRTHDAY || "12.12.1990";
+const APP_NATIONALITY = process.env.APP_NATIONALITY || "Syrien";
+const APP_UNIVERSITY = process.env.APP_UNIVERSITY || "TU-Dortmund";
+const APP_SEMESTER_COUNT = process.env.APP_SEMESTER_COUNT || "4";
+const APP_START_SEMESTER = process.env.APP_START_SEMESTER || "Sommersemester";
+const APP_YEAR = process.env.APP_YEAR || "2026";
+
+interface Offer {
+  id: string;
+  title: string;
+  url: string;
+  location?: string;
+  price?: number;
+}
+
 // Email (optional - nodemailer would need be added if you enable email)
 // const EMAIL_SMTP_HOST = process.env.EMAIL_SMTP_HOST; // etc.
 
@@ -123,14 +144,10 @@ async function saveMeta(meta: any) {
   await fs.writeJson(META_FILE, meta, { spaces: 2 });
 }
 
-function extractOffersFromHtml(html: string): { id: string; title: string; url: string }[] {
+function extractOffersFromHtml(html: string): Offer[] {
   const $ = cheerio.load(html);
 
-  // We'll skip the aggressive bodyText.includes("Keine Angebote") check 
-  // because it matches the dropdown options for cities without offers.
-  // Instead, we'll let the extraction logic find actual teaser cards.
-
-  const offersMap = new Map<string, { id: string; title: string; url: string }>();
+  const offersMap = new Map<string, Offer>();
 
   // 1. Specific extraction for the residential-offer-list (teaser cards with data-href)
   const teaserList = $("#residential-offer-list .teaser[data-href]");
@@ -141,11 +158,15 @@ function extractOffersFromHtml(html: string): { id: string; title: string; url: 
 
     const location = $(el).find(".subheader-5").text().trim();
     const title = $(el).find(".headline-5").text().trim();
-    const fullTitle = location ? `${location}: ${title}` : title;
+
+    // Extract price
+    const priceText = $(el).find(".residential-offer-card-facts .headline-4").first().text().trim();
+    const priceMatch = priceText.match(/([\d,.]+)/);
+    const price = priceMatch ? parseFloat(priceMatch[1].replace(".", "").replace(",", ".")) : undefined;
 
     const absolute = dataHref.startsWith("http") ? dataHref : new URL(dataHref, MONITOR_URL).toString();
     const id = absolute;
-    offersMap.set(id, { id, title: fullTitle || absolute, url: absolute });
+    offersMap.set(id, { id, title: title || absolute, url: absolute, location, price });
   });
 
   // 2. Fallback: standard anchor extraction (heuristic)
@@ -185,7 +206,116 @@ function extractOffersFromHtml(html: string): { id: string; title: string; url: 
   return Array.from(offersMap.values());
 }
 
-async function notifyNewOffers(newOffers: { id: string; title: string; url: string }[]) {
+async function applyForOffer(offer: Offer) {
+  const { url, location, title, price } = offer;
+
+  // Conditions: Dortmund, Einzelapartment, Price < 400
+  const isDortmund = location?.toLowerCase().includes("dortmund");
+  const isEinzelapartment = title?.toLowerCase().includes("einzelapartment");
+  const isPriceOk = price !== undefined && price <= 400;
+
+  if (!isDortmund || !isEinzelapartment || !isPriceOk) {
+    console.log(`[Apply] Offer "${title}" does not match criteria. (Dortmund: ${isDortmund}, Einzel: ${isEinzelapartment}, Price: ${price} < 400: ${isPriceOk})`);
+    return;
+  }
+
+  console.log(`[Apply] Matching offer found! Applying for: ${title} (${location}, ${price}€)`);
+
+  try {
+    // 1. Fetch listing page to get UUID
+    const res = await axios.get(url, { timeout: 15_000 });
+    const html = res.data;
+    const $ = cheerio.load(html);
+    const iframeSrc = $("#bewerben").attr("src");
+
+    if (!iframeSrc) {
+      console.error(`[Apply] Could not find application iframe on ${url}`);
+      return;
+    }
+
+    // Extract UUID from iframe src (parameter c)
+    const uuidMatch = iframeSrc.match(/[?&]c=([a-f0-9-]+)/);
+    const uuid = uuidMatch ? uuidMatch[1] : null;
+
+    if (!uuid) {
+      console.error(`[Apply] Could not extract UUID from iframe src: ${iframeSrc}`);
+      return;
+    }
+
+    // 2. Extract Offer ID from URL (the part after /r/f/)
+    // Example: https://www.stwdo.de/wohnen/aktuelle-wohnangebote/r/f/1/527/1/1900 -> 1/527/1/1900
+    const offerIdMatch = url.match(/\/r\/f\/(.+)$/);
+    const offerIdRaw = offerIdMatch ? offerIdMatch[1] : null;
+    const offerId = offerIdRaw ? encodeURIComponent(offerIdRaw) : null;
+
+    if (!offerId) {
+      console.error(`[Apply] Could not extract Offer ID from URL: ${url}`);
+      return;
+    }
+
+    const applicationUrl = `https://app.wohnungshelden.de/api/applicationFormEndpoint/3.0/form/create-application/${uuid}/${offerId}`;
+
+    const payload = {
+      "publicApplicationCreationTO": {
+        "applicantMessage": null,
+        "email": APP_EMAIL,
+        "firstName": APP_FIRST_NAME,
+        "lastName": APP_LAST_NAME,
+        "phoneNumber": APP_PHONE,
+        "salutation": "MR",
+        "street": null,
+        "houseNumber": null,
+        "zipCode": null,
+        "city": null,
+        "additionalAddressInformation": null
+      },
+      "saveFormDataTO": {
+        "formData": {
+          "$$_mobile_number_$$": APP_PHONE,
+          "$$_date_of_birth_$$": APP_BIRTHDAY,
+          "nationality": APP_NATIONALITY,
+          "startOfSemester": APP_START_SEMESTER,
+          "year": APP_YEAR,
+          "numberOfSemester": APP_SEMESTER_COUNT,
+          "stwdo_university": APP_UNIVERSITY,
+          "stwdo_angewiesen_auf_rollstuhlgerechte_wohnung": false,
+          "stwdo_immatrikulation": true,
+          "stwdo_datenschutzhinweis_bestaetigt": true
+        },
+        "files": []
+      },
+      "recaptchaToken": null
+    };
+
+    if (DRY_RUN) {
+      console.log(`[Apply][DRY_RUN] Would send POST to ${applicationUrl} with payload:`, JSON.stringify(payload, null, 2));
+      return;
+    }
+
+    const postRes = await axios.post(applicationUrl, payload, {
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://app.wohnungshelden.de",
+        "Referer": `https://app.wohnungshelden.de/public/listings/${offerId}/application?c=${uuid}`,
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0"
+      },
+      timeout: 20_000
+    });
+
+    if (postRes.data === true || postRes.status === 200) {
+      console.log(`[Apply] Successfully applied for ${title}!`);
+      await notifyNewOffers([{ ...offer, title: `✅ AUTO-APPLY: ${offer.title}` }]);
+    } else {
+      console.error(`[Apply] Failed to apply for ${title}. Response:`, postRes.data);
+    }
+
+  } catch (err: any) {
+    console.error(`[Apply] Error applying for ${url}:`, err.message || err);
+  }
+}
+
+async function notifyNewOffers(newOffers: Offer[]) {
   if (!newOffers.length) return;
 
   const lines = newOffers.map(o => `• ${o.title} — ${o.url}`);
@@ -288,6 +418,11 @@ async function checkOnce() {
     if (newOffers.length) {
       console.log(new Date().toLocaleString(), "- Detected new offers:", newOffers.map(o => o.title));
       await notifyNewOffers(newOffers);
+
+      // Auto-apply logic
+      for (const offer of newOffers) {
+        await applyForOffer(offer);
+      }
 
       // PERSISTENT STORAGE: Add NEW ids to the existing set
       newOffers.forEach(o => lastSeenIds.add(o.id));
