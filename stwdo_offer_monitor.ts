@@ -212,10 +212,10 @@ async function applyForOffer(offer: Offer) {
   // Conditions: Dortmund, Einzelapartment, Price < 400
   const isDortmund = location?.toLowerCase().includes("dortmund");
   const isEinzelapartment = title?.toLowerCase().includes("einzelapartment");
-  const isPriceOk = price !== undefined && price <= 360;
+  const isPriceOk = price !== undefined && price <= 365;
 
   if (!isDortmund || !isEinzelapartment || !isPriceOk) {
-    console.log(`[Apply] Offer "${title}" does not match criteria. (Dortmund: ${isDortmund}, Einzel: ${isEinzelapartment}, Price: ${price} <= 360: ${isPriceOk})`);
+    console.log(`[Apply] Offer "${title}" does not match criteria. (Dortmund: ${isDortmund}, Einzel: ${isEinzelapartment}, Price: ${price} <= 365: ${isPriceOk})`);
     return;
   }
 
@@ -223,7 +223,12 @@ async function applyForOffer(offer: Offer) {
 
   try {
     // 1. Fetch listing page to get UUID
-    const res = await axios.get(url, { timeout: 15_000 });
+    if (USE_PROXY) console.log(`[Apply] Fetching listing details via proxy: ${PROXY_HOST}...`);
+    const res = await axios.get(url, {
+      timeout: 85_000,
+      httpsAgent: USE_PROXY ? httpsAgent : undefined,
+      proxy: false,
+    });
     const html = res.data;
     const $ = cheerio.load(html);
     const iframeSrc = $("#bewerben").attr("src");
@@ -300,7 +305,9 @@ async function applyForOffer(offer: Offer) {
         "Referer": `https://app.wohnungshelden.de/public/listings/${offerId}/application?c=${uuid}`,
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0"
       },
-      timeout: 20_000
+      timeout: 20_000,
+      httpsAgent: USE_PROXY ? httpsAgent : undefined,
+      proxy: false,
     });
 
     if (postRes.data === true || postRes.status === 200) {
@@ -384,9 +391,12 @@ async function checkOnce() {
     responseType: "text",
     validateStatus: s => (s >= 200 && s < 300) || s === 304,
     timeout: 30_000,
+    httpsAgent: USE_PROXY ? httpsAgent : undefined,
+    proxy: false,
   };
 
   try {
+    if (USE_PROXY) console.log(`${new Date().toLocaleString()} - Checking for offers via proxy: ${PROXY_HOST}...`);
     const res = await axios(axiosConfig);
     if (res.status === 304) {
       console.log(new Date().toLocaleString(), "- Not modified (304). No changes.");
