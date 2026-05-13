@@ -212,10 +212,10 @@ async function applyForOffer(offer: Offer) {
   // Conditions: Dortmund, Einzelapartment, Price < 400
   const isDortmund = location?.toLowerCase().includes("dortmund");
   const isEinzelapartment = title?.toLowerCase().includes("einzelapartment");
-  const isPriceOk = price !== undefined && price <= 350;
+  const isPriceOk = price !== undefined && price <= 360;
 
   if (!isDortmund || !isEinzelapartment || !isPriceOk) {
-    console.log(`[Apply] Offer "${title}" does not match criteria. (Dortmund: ${isDortmund}, Einzel: ${isEinzelapartment}, Price: ${price} < 400: ${isPriceOk})`);
+    console.log(`[Apply] Offer "${title}" does not match criteria. (Dortmund: ${isDortmund}, Einzel: ${isEinzelapartment}, Price: ${price} <= 360: ${isPriceOk})`);
     return;
   }
 
